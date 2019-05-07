@@ -1,0 +1,359 @@
+---
+title: "Report of Final Project"
+author: "Qiying WU"
+date: "4/8/2019"
+output:
+  pdf_document: 
+      number_sections: true
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,warning=FALSE, message=FALSE,fig.height=3.5,fig.width = 7)
+```
+
+```{r,message=FALSE}
+library(data.table)
+library(XML)
+library(stringr)
+library(RCurl)
+library(dplyr)
+library(rvest)
+library(tidyverse)
+library(tidytext)
+library(RColorBrewer)
+library(wordcloud)
+library(reshape2)
+```
+
+
+# Introduction
+The main idea of this project is to analysis from different aspects of the top 100 movies on Netflix which provides with imdb. First part is about how I extract the information from the website and clean them up. The analysis is from different aspects due to the variety of data in that website. Not only the descriptive statistics are included, but also the analysis of relationship between the covariate like time, votes, gross,etc.
+
+![Example in Website](/Users/wuqiying/Desktop/pic.png)
+
+# Webscraping and cleaning
+The data is from  the top 100 Best Movies on Netflix Instant (Updated for March, 2019)(https://www.imdb.com/list/ls056789192/). Figure 1 is an example of what the website looks like. Each text showing in the page contains lots of tags which means I need to extract them respectively from each tags. Some of the tags has the same name and attributes and has lots of parent nodes like the Figure 2 shows. Thus, I decide to use xpath to locate those tags.
+
+![Example in HTML](/Users/wuqiying/Desktop/pic1.png)
+
+## Extract Data using rvest and xpath
+Extract the title, released year,length, genre,rate, director,vote, gross, comment and abstrat from the website. First thing needs to do is to locate every tags contains the data which I used xpath to locate them and use rvest to extract them. While some of the data can not be scraped directly and they are not clean. In this part, I clean the data, extract the number from original format by using regular expression. Moreover, the challenge I had met is that some of the movie in the website didn't show their gross. I need to replace the movie which did not have gross with NA. However,votes and gross are in the same tag. And I scrapt two string. gross_less only have 87 gross and g has both votes and gross but it is mess. If the symbol '$' is detected in g, give the gross[i] with correspond value in gross_less.
+
+## Data Clean
+After scraping, most columns of the metadata scraped from website is factor type and with the punctuation. In order to remove the punctuation and transfer them into numeric type, I use the function from stringr like str_extract, str_replace_all. As for the comment,abstract and director, I change them as character.
+
+
+
+```{r}
+
+url <- "https://www.imdb.com/list/ls056789192/" 
+#extract movies titles
+title <- url%>%
+  read_html()%>%
+  html_nodes(xpath = "//h3/a[@href]")%>%
+  html_text()
+#extract the year movie was released
+year <- url%>%
+  read_html()%>%
+  html_nodes(xpath = "//h3/span[@class ='lister-item-year text-muted unbold']")%>%
+  html_text()%>%
+  str_extract("\\d\\d\\d\\d")
+#extract film's length
+time <- url%>%
+  read_html()%>%
+  html_nodes(xpath = "//span[@class='runtime']")%>%
+  html_text()
+#extract  film's  genre
+genre <- url%>%
+  read_html()%>%
+  html_nodes(xpath = "//span[@class='genre']")%>%
+  html_text()%>%
+  str_remove("\n")%>%
+  str_remove("            ")
+#extract film's rate
+rate <- url%>%
+  read_html()%>%
+  html_nodes(xpath = "//span[@class='ipl-rating-star__rating']")%>%
+  html_text()
+rate <- rate[seq(1, 2300, by = 23)]
+#extract the director of movie
+director <- url%>%
+  read_html()%>%
+  html_nodes(xpath = "//p[@class='text-muted text-small']/a[position()=1]")%>%
+  html_text()
+#extract the number of votes
+vote<- url%>%
+  read_html()%>%
+  html_nodes(xpath = "//span[@name='nv'][position()=1]")%>%
+  html_text()
+#extract the gross of movie
+#Because some of the movie in the website didn't show their gross
+#I need to replace the movie which did not have gross with NA
+#However,votes and gross are in the same tag. And I scrapt two string. gross_less only have 87 gross and g has both votes and gross. If g has the symbol $, give the gross[i] with correspond value in gross_less
+gross_less <- url%>%
+  read_html()%>%
+  html_nodes(xpath = "//span[@name='nv'][position()=2]")%>%
+  html_text()
+g <- url%>%
+  read_html()%>%
+  html_nodes(xpath = "//p[@class='text-muted text-small'][position()=3]")%>%
+  html_text()
+gross <- c()
+a=1
+for(i in 1:100){
+  if(str_detect(g[i], "\\$")){
+    gross[i]=gross_less[a]
+    a = a+1
+  }
+  else{
+    gross[i]=NA
+  }
+}
+#extract the  abstract of movie
+abstr <- url%>%
+  read_html()%>%
+  html_nodes(xpath = "//p[@class][position()=2]")%>%
+  html_text()
+abstract <- abstr[-1]%>%str_remove("\n    ")
+#extract the comment
+com <- url%>%
+  read_html()%>%
+  html_nodes(xpath = "//div[@class='list-description']")%>%
+  html_text()
+comment <- com[-1]%>%
+  str_remove("\n.*")
+#generate a dataframe
+final <- data.frame("title"=title,"year"=year,"time"=time,"genre"=genre,"rate"=rate,"vote"=vote,"gross"=gross,"director"=director,"comment"=comment,"abstract"=abstract)
+final$rate <- as.numeric(as.character(final$rate))
+final$comment<- as.character(final$comment)
+final$abstract<- as.character(final$abstract)
+```
+
+
+## Saving as csv file
+```{r,echo=TRUE}
+write.csv(final,file="/Users/wuqiying/Desktop/final.csv")
+```
+
+#  Data Analysis
+This part include the descriptive analysis, text analysis in comment as well as linear regression according to their relationship plot.
+
+## Group by year and how the movies are distributed across years
+```{r barplot, fig.cap="The Number of Movies in Each Year"}
+most_year <- final%>%group_by(year)%>%
+  summarise(total=n())%>%
+  arrange(desc(total))
+ggplot(most_year[1:10,],aes(year,total))+geom_bar(stat="identity")
+```
+
+From Figure 3, we can find 2016,2014 and 2006 have more movies in the top 100. And rest of the year each has nearly 2 or 3 or even less. I guess it is because 2016 was the year of the blockbuster movie that made fans excited. There are even over six movies released by Marvel and DC. And one thing very interesting, people seems like lots of old movie and give them with high rate.
+
+
+```{r barplot2,fig.cap="The Trend of Rate Across the Year"}
+final_num <- final%>%
+  mutate(numeric_gross = as.numeric(str_extract(final$gross,'\\d*\\.\\d*')))%>%
+  mutate(numeric_time = as.numeric(str_extract(final$time,'\\d*')))%>%
+  mutate(numeric_vote = as.numeric(str_replace_all(final$vote,',','')))
+final_num%>%
+  select(year,rate)%>%
+  group_by(year)%>%
+  summarise(mean_rate = mean(rate))%>%
+  ggplot(aes(year,mean_rate,group=1))+geom_point()+geom_line()+geom_smooth()+theme(axis.text.x = element_text(angle = 90, hjust = 0.5, vjust = 0.5))
+```
+
+
+Figure 4 is only a genera trend of rate across the year. Because they are top 100 movies in the rank and some of years only have one or two movies which makes the mean of rate is not accurate enough. But we can see that the overall rate is around 7.5.
+
+## Rank the movies by their gross income,rate and length
+
+```{r}
+first <- head(final_num%>%
+       select(title,numeric_gross)%>%
+       arrange(desc(numeric_gross)),5)
+second <- head(final_num%>%
+       select(title,rate)%>%
+       arrange(desc(rate)),5)
+third <- head(final_num%>%
+       select(title,numeric_time)%>%
+       arrange(desc(numeric_time)),5)
+#tab <- cbind(first,second,third)
+#knitr::kable(tab,caption = "Top 5 Gross,Rate,Length")
+knitr::kable(first,caption = "Top 5 Gross")
+knitr::kable(second,caption = "Top 5 Rate")
+```
+
+\newpage
+
+```{r}
+knitr::kable(third,caption = "Top 5 Length")
+```
+
+
+The three table above shows the top 5 of gross imcome, rate and length respectively. We can see that Avengers:Infinity War gots most gross income. And The Shawshank Redemption has highest rate. The longest movie is Schindler's List 
+
+## Different genre in top 100 movies
+First of all, I summarise them by string detecting in each keywords of genre. Then I reshape the dataframe into long shape with the genre and number of genre.
+
+```{r,fig.cap="Different Genre in Top 100 Movies"}
+#genre
+final_genre <- final%>%
+  summarise(Drama=sum(str_detect(final$genre,'Drama')),Crime=sum(str_detect(final$genre,'Crime')),
+            Action=sum(str_detect(final$genre,'Action')),Adventure=sum(str_detect(final$genre,'Adventure')),
+            Comedy=sum(str_detect(final$genre,'Comedy')),Thriller=sum(str_detect(final$genre,'Thriller')),
+            Horror=sum(str_detect(final$genre,'Horror')),Biography=sum(str_detect(final$genre,'Biography')),
+            Family=sum(str_detect(final$genre,'Family')),
+            ScienceFiction =sum(str_detect(final$genre,'Sci-Fi')))
+final_genre <- melt(final_genre,value.name = "number",variable.name = "genre")
+ggplot(final_genre,aes(genre,number))+geom_bar(stat="identity")
+```
+
+From Figure 5, we can find that Drama and Adventure have more movies in the top 100.
+
+## The rate in genre Drama, Adventure, Thriller(Horror)
+Like the former plot, extract each genre with correspond rate and combine them as a new dataframe to create the boxplot.
+
+```{r boxplot,fig.cap="The rate in Genre Drama, Adventure, Thriller(Horror)"}
+dra_adv_rate <- final_num%>%
+  select(title,rate,genre)%>%
+  filter(str_detect(genre,'Drama|Adventure|Horror|Thriller|Horror'))%>%
+  mutate(drama=str_detect(genre,'Drama'),
+         adventure=str_detect(genre,'Adventure'),
+         thrill = str_detect(genre,'Thriller|Horror'))
+drama_rate <- dra_adv_rate[dra_adv_rate$drama,]$rate
+adv_rate <- dra_adv_rate[dra_adv_rate$adventure,]$rate
+thr_rate <- dra_adv_rate[dra_adv_rate$thrill,]$rate
+dra_adv <- data.frame("genre"=c(rep("Drama",length(drama_rate)),
+                                rep("Adventure",length(adv_rate)),
+                                rep("Thriller",length(thr_rate))),"rate"=c(drama_rate,adv_rate,thr_rate))
+ggplot(dra_adv,aes(genre,rate))+geom_boxplot()
+
+```
+
+From Figure 6, we can easily find that the genre of Drama has higher rate. And Thriller movie has relatively lower rate.
+
+## Director in top 100 movies.
+
+```{r,fig.cap="The Number of Movies that Director Has in Top 100"}
+most_director <- final%>%group_by(director)%>%
+  summarise(total=n())%>%
+  arrange(desc(total))
+ggplot(most_director[1:11,],aes(director,total))+geom_bar(stat="identity")+coord_flip()
+```
+
+From Figure 7, we can find Steven Spielberg and Don Bluth have more movies in the top 100. And rest of the year each has 2 or even less which conform to our acknowledge.
+
+
+```{r,fig.cap="The Total Gross & Mean Rate that Director Has in Top 100"}
+dir_gross <- final_num%>%
+  group_by(director)%>%
+  summarise(totalgross = sum(numeric_gross),meanrate = mean(rate))%>%
+  arrange(desc(totalgross),desc(meanrate))
+dir <- melt(dir_gross[1:10,])
+ggplot(dir,aes(director,value,fill=variable))+geom_bar(stat="identity")+facet_wrap(~variable,scales = "free",nrow=1)+theme(axis.text.x = element_text(angle = 90, hjust = 0.5, vjust = 0.5))
+```
+
+\newpage
+
+Figure 8 shows the total gross and mean rate of each movie director. Anthony Russo got most total gross among the top 100 movie. And we can find that the correlation betwin the gross and rate is not that strong which has same conclusion as the following analysis.
+
+
+## Word cloud in comment
+Before plot the word cloud we have to count the number of each word without stopwords which unnest_tokens() was used to seperate the words and anti_join with the stop words.
+
+```{r word cloud, fig.cap="Word Cloud of Comments"}
+#word cloud in comment
+word_cloud <- final%>%
+  select(comment)%>%
+  unnest_tokens(word, comment)%>% 
+  anti_join(stop_words) %>%
+  count(word, sort = TRUE)
+pal <- brewer.pal(8, "Dark2")
+wordcloud(word_cloud$word,word_cloud$n,colors=pal)
+```
+
+## Comment sentiment analysis
+Calculate the sentiment score by positive minus negative using get_sentiments() for each movie.
+
+```{r sentiment, fig.cap="Comment Sentiment"}
+#comment sentiments
+senti <- final%>%
+  select(title,comment)%>%
+   mutate(linenumber = row_number())%>%
+  unnest_tokens(word,comment)%>%
+  inner_join(get_sentiments("bing"))%>%
+  count(title,index = linenumber,sentiment) %>%
+  spread(sentiment, n, fill = 0) %>%
+  mutate(sentiment = positive - negative)
+ggplot(senti, aes(index, sentiment)) +
+  geom_bar(alpha = 0.8, stat = "identity", show.legend = FALSE)
+
+fourth <- senti[which(senti$sentiment<0),]
+knitr::kable(fourth,caption = "Negative Sentiment")
+```
+
+According to the sentiment analysis and Figure 10, we can see that most of movies get positive comment. The table 4 shows the movies which get nagative sentiment.
+
+
+## Top words in abstracrt
+```{r,fig.cap="Top Words in Abstracrt"}
+abst_word <- final%>%
+  select(abstract)%>%
+  unnest_tokens(word, abstract)%>% 
+  anti_join(stop_words) %>%
+  count(word, sort = TRUE)%>%
+  arrange(desc(n))
+ggplot(abst_word[1:10,],aes(word,n))+geom_bar(stat = "identity")
+
+```
+
+From Figure 11, we can find that people may prefer the movies like has family story or scary scene with killer.
+
+\newpage
+
+## The relationship between rate, gross, length, votes.
+Before complete the regression, I did some visualization about the correlation of variates that I was interested in which make more sense about the regression result. 
+
+```{r,fig.cap="Distribution of Rate among Length"}
+final_time <- final_num%>%
+  select(title,rate,numeric_time)%>%
+  mutate(long = ifelse(numeric_time>100,TRUE,FALSE))
+long_rate <- final_time[final_time$long,]$rate
+short_rate <- final_time[!final_time$long,]$rate
+lo_sh <- data.frame("time"=c(rep("Greater than 100 minutes",length(long_rate)),
+                            rep("Less than 100 minutes",length(short_rate)))
+                    ,"rate"=c(long_rate,short_rate))
+ggplot(lo_sh,aes(time,rate))+geom_boxplot()
+```
+
+Figure 12 shows that the duration greater than 100 minutes has higher average level of rate. 
+
+```{r,fig.cap="Relation of Rate,Gross,Length,Vote",fig.height=7}
+#lm
+relation <- final_num%>%
+  select(rate,numeric_gross,numeric_time,numeric_vote)
+rela_melt <- reshape(relation,times = names(relation[,2:4]),varying = list(names(relation[,2:4])),direction = "long")
+colnames(rela_melt) <- c("rate","category","value","id")
+ggplot(rela_melt,aes(rate,value,fill=category,color=category))+geom_point()+geom_smooth()+facet_wrap(~category,scales = "free",nrow = 2)
+
+fit <- lm(rate~numeric_time+numeric_vote,data=final_num)
+summary(fit)
+```
+
+
+From the plot we can find that the vote and time has positive relationship with the rate. More people vote the movie and longer the duration of the movie, the rate is higher. Therefore, I try to fit in a linear model which response variable is rate. As the result shows, the numeric_time and numeric_vote are significantly not zero which is in accordance with the plot. And their coefficient are both positive which is also same as the plot.
+
+
+
+
+# Conclusion
+
+The web scraping and cleaning part gather the neat and rich information dataframe which provide the fundation of following data analysis. From the data analysis, we can find that people prefer the movies in 2016 and Avengers:Infinity War gots the highest total gross 678.82 million dollars followed by Incredible II 608.58 million dollars. Furthermore, Drama and Adventure type of movies have more movies in the top 100 which is in accordance with the rate distribution. Drama and Adventure types of movies have higher rate in general. As for director, Steven Spielberg and Don Bluth have more movies in the top 100. For example, E.T, Lincoln,Schindler's List from Steven Spielberg have high rate in this rank. And Anthony Russo got most total gross among the top 100 movie cause the Infinity War gots much gross. 
+
+In text analysis, the comment is used to do the sentiment analysis. Most of the movies get positive comment in sentiment analysis. There are few of movies get negative comments. Extracting them, I find that it is because they are horror movie which must contains some words like scare, threat. In addition, most of the words in abstaction is about family, killer and mysterious which means people may prefer the movies telling about family and the movies is exciting and thrilling.
+
+Finally, the positive correlation between votes, gross, length and rate can be seen from the plot. With the duration of movies increase, the number of votes and the total gross income increase, the rate will increase. And the regression shows the same results as the plot. The numeric_time and numeric_vote are significantly greater than zero.
+
+# Github link
+
+Link: (https://github.com/qiyingwu/final-project)
